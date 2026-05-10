@@ -35,3 +35,14 @@ The first version simulates sensor data before the real STM32, Raspberry Pi, sen
 ## Local development
 
 Backend setup instructions will be added as the project develops.
+
+## Mock sensor simulation
+
+Before hardware arrives, the project uses a fake sensor sender.
+
+Run the backend:
+
+```bash
+cd backend
+source venv/bin/activate
+uvicorn app.main:app --reload
