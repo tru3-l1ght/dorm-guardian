@@ -44,3 +44,17 @@ class AlertOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class SecurityEventOut(BaseModel):
+    id: int
+    ip_address: str | None
+    event_type: str
+    severity: str
+    method: str | None
+    path: str | None
+    user_agent: str | None
+    details: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
