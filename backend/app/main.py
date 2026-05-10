@@ -2,9 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
+from app.routes.alerts import router as alerts_router
+from app.routes.fan import router as fan_router
 from app.routes.ingest import router as ingest_router
 from app.routes.readings import router as readings_router
-from app.routes.fan import router as fan_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,6 +22,7 @@ app.add_middleware(
 app.include_router(ingest_router)
 app.include_router(readings_router)
 app.include_router(fan_router)
+app.include_router(alerts_router)
 
 
 @app.get("/api/health")

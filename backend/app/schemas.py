@@ -30,3 +30,17 @@ class FanStateOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AlertOut(BaseModel):
+    id: int
+    alert_type: str
+    severity: str
+    title: str
+    message: str
+    is_resolved: bool
+    created_at: datetime
+    resolved_at: datetime | None
+
+    class Config:
+        from_attributes = True

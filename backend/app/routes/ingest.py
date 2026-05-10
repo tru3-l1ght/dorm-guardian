@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.alert_logic import create_alert_with_cooldown
 from app.database import get_db
 from app.fan_logic import decide_fan_state
 from app.models import SensorReading, FanState
@@ -34,6 +35,8 @@ def ingest_sensor_reading(
         db.add(fan_state)
         db.flush()
 
+    previous_fan_state = fan_state.is_on
+
     new_state, reason = decide_fan_state(
         temperature_c=payload.temperature_c,
         current_state=fan_state.is_on,
@@ -42,6 +45,36 @@ def ingest_sensor_reading(
 
     fan_state.is_on = new_state
     fan_state.reason = reason
+
+    if new_state != previous_fan_state:
+        create_alert_with_cooldown(
+            db=db,
+            alert_type="device.fan_state_changed",
+            severity="info",
+            title="Fan state changed",
+            message=f"Fan turned {'ON' if new_state else 'OFF'}: {reason}",
+            cooldown_minutes=1,
+        )
+
+    if payload.temperature_c >= 30.0:
+        create_alert_with_cooldown(
+            db=db,
+            alert_type="environment.temperature_high",
+            severity="warning",
+            title="High temperature detected",
+            message=f"Temperature reached {payload.temperature_c:.1f}°C",
+            cooldown_minutes=5,
+        )
+
+    if payload.air_quality >= 1800:
+        create_alert_with_cooldown(
+            db=db,
+            alert_type="environment.air_quality_bad",
+            severity="warning",
+            title="Poor air quality detected",
+            message=f"Air quality reading reached {payload.air_quality:.0f}",
+            cooldown_minutes=5,
+        )
 
     db.commit()
     db.refresh(reading)
