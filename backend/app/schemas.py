@@ -20,3 +20,13 @@ class SensorReadingOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class FanStateOut(BaseModel):
+    is_on: bool
+    mode: str
+    reason: str
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

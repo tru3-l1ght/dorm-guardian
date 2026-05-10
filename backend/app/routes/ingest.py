@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import SensorReading
+from app.fan_logic import decide_fan_state
+from app.models import SensorReading, FanState
 from app.schemas import SensorReadingCreate, SensorReadingOut
 
 router = APIRouter(prefix="/api/device-ingest", tags=["device-ingest"])
@@ -21,6 +22,27 @@ def ingest_sensor_reading(
     )
 
     db.add(reading)
+
+    fan_state = db.query(FanState).first()
+
+    if fan_state is None:
+        fan_state = FanState(
+            is_on=False,
+            mode="auto",
+            reason="Initial state",
+        )
+        db.add(fan_state)
+        db.flush()
+
+    new_state, reason = decide_fan_state(
+        temperature_c=payload.temperature_c,
+        current_state=fan_state.is_on,
+        automation_enabled=True,
+    )
+
+    fan_state.is_on = new_state
+    fan_state.reason = reason
+
     db.commit()
     db.refresh(reading)
 
