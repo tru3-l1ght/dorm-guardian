@@ -22,6 +22,20 @@ Dorm Guardian monitors a room using:
 - Rule-based alerts
 - systemd auto-start deployment
 
+## Demo
+
+### Live dashboard
+
+![Dorm Guardian dashboard](docs/images/dashboard.png)
+
+### Camera stream
+
+![Camera stream](docs/images/camera-stream.png)
+
+### Motion detection
+
+![Motion detection](docs/images/motion-detection.png)
+
 ## Current status
 
 Working Raspberry Pi MVP:
