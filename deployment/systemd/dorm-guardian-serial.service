@@ -1,0 +1,14 @@
+[Unit]
+Description=Dorm Guardian STM32 Serial Collector
+After=network.target dorm-guardian-backend.service
+Requires=dorm-guardian-backend.service
+
+[Service]
+User=tru3
+WorkingDirectory=/home/tru3/dorm-guardian/dorm-guardian/backend
+ExecStart=/home/tru3/dorm-guardian/dorm-guardian/backend/venv/bin/python -m app.services.serial_collector
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

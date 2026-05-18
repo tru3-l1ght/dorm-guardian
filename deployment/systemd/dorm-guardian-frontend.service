@@ -1,0 +1,13 @@
+[Unit]
+Description=Dorm Guardian React Frontend
+After=network.target
+
+[Service]
+User=tru3
+WorkingDirectory=/home/tru3/dorm-guardian/dorm-guardian/frontend
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
