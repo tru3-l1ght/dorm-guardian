@@ -429,3 +429,34 @@ pre {
     min-height: 240px;
   }
 }
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.login-card {
+  width: min(480px, 100%);
+}
+
+.login-form {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.login-input {
+  flex: 1;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.55);
+  color: inherit;
+  font: inherit;
+}
+
+.hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

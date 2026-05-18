@@ -69,8 +69,15 @@ type AlertSummary = {
   latest_alert: Alert | null;
 };
 
+type AuthStatus = {
+  authenticated: boolean;
+  auth_enabled: boolean;
+};
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
@@ -495,11 +502,101 @@ function MotionEventsPanel() {
   );
 }
 
+
+function LoginScreen({ onLoginSuccess }: { onLoginSuccess: () => void }) {
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setLoginError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Invalid password");
+      }
+
+      onLoginSuccess();
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Login failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="page login-page">
+      <section className="card login-card">
+        <p className="eyebrow">Dorm Guardian</p>
+        <h1>Login required</h1>
+        <p className="subtitle">
+          Enter the dashboard password to access sensors, camera, motion events,
+          and alerts.
+        </p>
+
+        <form className="login-form" onSubmit={handleLogin}>
+          <input
+            className="login-input"
+            type="password"
+            placeholder="Dashboard password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoFocus
+          />
+
+          <button className="camera-toggle" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "Checking..." : "Login"}
+          </button>
+        </form>
+
+        {loginError && (
+          <div className="camera-message error">{loginError}</div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function App() {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [latestReading, setLatestReading] = useState<SensorReading | null>(null);
   const [history, setHistory] = useState<SensorReading[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+
+  async function checkAuthStatus() {
+    try {
+      const data = await fetchJson<AuthStatus>(`${API_BASE_URL}/api/auth/status`);
+      setAuthenticated(data.authenticated);
+    } catch {
+      setAuthenticated(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+
+    setAuthenticated(false);
+    setLatestReading(null);
+    setHistory([]);
+  }
 
   async function loadDashboardData() {
     try {
@@ -524,11 +621,24 @@ function App() {
       setHistory(historyData);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      const message = err instanceof Error ? err.message : "Unknown error";
+
+      if (message.includes("401")) {
+        setAuthenticated(false);
+        setError("Authentication required. Please log in again.");
+      } else {
+        setError(message);
+      }
     }
   }
 
   useEffect(() => {
+    checkAuthStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
+
     loadDashboardData();
 
     const intervalId = window.setInterval(() => {
@@ -536,7 +646,7 @@ function App() {
     }, 2000);
 
     return () => window.clearInterval(intervalId);
-  }, []);
+  }, [authenticated]);
 
   const chartData = useMemo(() => {
     return [...history].reverse().map((reading) => ({
@@ -547,6 +657,28 @@ function App() {
       light: reading.light,
     }));
   }, [history]);
+
+  if (authLoading) {
+    return (
+      <main className="page login-page">
+        <section className="card login-card">
+          <p className="eyebrow">Dorm Guardian</p>
+          <h1>Checking access...</h1>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <LoginScreen
+        onLoginSuccess={() => {
+          setAuthenticated(true);
+          loadDashboardData();
+        }}
+      />
+    );
+  }
 
   return (
     <main className="page">
@@ -561,11 +693,17 @@ function App() {
           </p>
         </div>
 
-        <div className="status-pill">
-          <span
-            className={health?.status === "ok" ? "dot online" : "dot offline"}
-          />
-          {health?.status === "ok" ? "Backend online" : "Backend offline"}
+        <div className="hero-actions">
+          <div className="status-pill">
+            <span
+              className={health?.status === "ok" ? "dot online" : "dot offline"}
+            />
+            {health?.status === "ok" ? "Backend online" : "Backend offline"}
+          </div>
+
+          <button className="camera-toggle" onClick={handleLogout}>
+            Logout
+          </button>
         </div>
       </section>
 

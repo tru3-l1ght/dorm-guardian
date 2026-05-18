@@ -1,3 +1,7 @@
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel
+import hmac
 import sqlite3
 import time
 from datetime import datetime
@@ -23,6 +27,9 @@ DB_PATH = "dorm_guardian.db"
 CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "0"))
 CAMERA_ENABLED = os.getenv("CAMERA_ENABLED", "true").lower() in ["1", "true", "yes"]
 USE_PICAMERA2 = os.getenv("USE_PICAMERA2", "auto").lower()
+AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
+AUTH_COOKIE_NAME = "dorm_guardian_auth"
+
 
 MOTION_SAVE_COOLDOWN_SECONDS = 10
 ALERT_SAVE_COOLDOWN_SECONDS = 30
@@ -48,13 +55,101 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-	"http://192.168.1.182:5173",
+        "http://rasppi4.local:5173",
+        "http://192.168.1.182:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+class LoginRequest(BaseModel):
+    password: str
+
+
+PUBLIC_PATHS = {
+    "/api/health",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/status",
+}
+
+
+def auth_enabled() -> bool:
+    return bool(AUTH_TOKEN)
+
+
+def token_is_valid(token: str | None) -> bool:
+    if not AUTH_TOKEN or not token:
+        return False
+    return hmac.compare_digest(token, AUTH_TOKEN)
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    path = request.url.path
+
+    if not path.startswith("/api"):
+        return await call_next(request)
+
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    if not auth_enabled():
+        return await call_next(request)
+
+    cookie_token = request.cookies.get(AUTH_COOKIE_NAME)
+    auth_header = request.headers.get("Authorization", "")
+
+    bearer_token = None
+    if auth_header.startswith("Bearer "):
+        bearer_token = auth_header.replace("Bearer ", "", 1).strip()
+
+    if token_is_valid(cookie_token) or token_is_valid(bearer_token):
+        return await call_next(request)
+
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Authentication required"},
+    )
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginRequest, response: Response):
+    if not auth_enabled():
+        return {"authenticated": True, "auth_enabled": False}
+
+    if not token_is_valid(payload.password):
+        raise HTTPException(status_code=401, detail="Invalid password")
+
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=payload.password,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=60 * 60 * 24 * 7,
+    )
+
+    return {"authenticated": True, "auth_enabled": True}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(AUTH_COOKIE_NAME)
+    return {"authenticated": False}
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    if not auth_enabled():
+        return {"authenticated": True, "auth_enabled": False}
+
+    cookie_token = request.cookies.get(AUTH_COOKIE_NAME)
+    return {
+        "authenticated": token_is_valid(cookie_token),
+        "auth_enabled": True,
+    }
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
