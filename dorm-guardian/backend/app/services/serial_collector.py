@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 import serial
 
+import os
 
-PORT = "/dev/ttyACM0"  # Mac
-# PORT = "/dev/ttyACM0"         # Raspberry Pi later
+PORT = os.getenv("SERIAL_PORT", "/dev/ttyACM0")
 
 BAUD = 115200
 DB_PATH = "dorm_guardian.db"
