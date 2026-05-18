@@ -4,6 +4,14 @@ from datetime import datetime
 from typing import Generator
 
 import cv2
+import os
+
+try:
+    from picamera2 import Picamera2
+    PICAMERA2_AVAILABLE = True
+except Exception:
+    Picamera2 = None
+    PICAMERA2_AVAILABLE = False
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -12,8 +20,9 @@ app = FastAPI()
 
 DB_PATH = "dorm_guardian.db"
 
-CAMERA_INDEX = 0
-CAMERA_ENABLED = True
+CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "0"))
+CAMERA_ENABLED = os.getenv("CAMERA_ENABLED", "true").lower() in ["1", "true", "yes"]
+USE_PICAMERA2 = os.getenv("USE_PICAMERA2", "auto").lower()
 
 MOTION_SAVE_COOLDOWN_SECONDS = 10
 ALERT_SAVE_COOLDOWN_SECONDS = 30
@@ -39,6 +48,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+	"http://192.168.1.182:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -464,8 +474,59 @@ def get_alerts_summary():
         "latest_alert": latest_alert,
     }
 
+class PiCameraWrapper:
+    def __init__(self):
+        if not PICAMERA2_AVAILABLE or Picamera2 is None:
+            raise RuntimeError("Picamera2 is not available.")
 
-def open_camera():
+        self.camera = Picamera2()
+        config = self.camera.create_preview_configuration(
+            main={
+                "size": (640, 480),
+                "format": "RGB888",
+            }
+        )
+        self.camera.configure(config)
+        self.camera.start()
+        time.sleep(1.0)
+
+    def read(self):
+        frame = self.camera.capture_array()
+        return True, frame
+
+    def release(self):
+        # Important:
+        # Do not stop the Pi camera after every stream request.
+        # The Raspberry Pi camera stack can lock if we rapidly open/close it.
+        pass
+
+    def shutdown(self):
+        try:
+            self.camera.stop()
+            self.camera.close()
+        except Exception:
+            pass
+shared_camera = None
+
+
+def get_shared_camera():
+    global shared_camera
+
+    if shared_camera is not None:
+        return shared_camera
+
+    if USE_PICAMERA2 in ["1", "true", "yes", "auto"] and PICAMERA2_AVAILABLE:
+        try:
+            print("Opening shared Raspberry Pi Camera with Picamera2")
+            shared_camera = PiCameraWrapper()
+            return shared_camera
+        except Exception as exc:
+            print(f"Shared Picamera2 failed: {exc}")
+
+            if USE_PICAMERA2 != "auto":
+                return None
+
+    print(f"Opening OpenCV camera index {CAMERA_INDEX}")
     camera = cv2.VideoCapture(CAMERA_INDEX)
 
     if not camera.isOpened():
@@ -475,8 +536,11 @@ def open_camera():
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     camera.set(cv2.CAP_PROP_FPS, 30)
 
-    return camera
+    shared_camera = camera
+    return shared_camera
 
+def open_camera():
+    return get_shared_camera()
 
 def encode_frame(frame) -> bytes | None:
     ret, buffer = cv2.imencode(".jpg", frame)
@@ -506,25 +570,20 @@ def generate_camera_frames() -> Generator[bytes, None, None]:
         print("ERROR: Could not open camera.")
         return
 
-    try:
-        while True:
-            success, frame = camera.read()
+    while True:
+        success, frame = camera.read()
 
-            if not success:
-                break
+        if not success:
+            break
 
-            frame = cv2.flip(frame, 1)
+        frame = cv2.flip(frame, 1)
 
-            frame_bytes = encode_frame(frame)
+        frame_bytes = encode_frame(frame)
 
-            if frame_bytes is None:
-                continue
+        if frame_bytes is None:
+            continue
 
-            yield mjpeg_chunk(frame_bytes)
-
-    finally:
-        camera.release()
-
+        yield mjpeg_chunk(frame_bytes)
 
 def generate_motion_frames() -> Generator[bytes, None, None]:
     global last_saved_motion_time
@@ -540,88 +599,83 @@ def generate_motion_frames() -> Generator[bytes, None, None]:
 
     previous_gray = None
 
-    try:
-        while True:
-            success, frame = camera.read()
+    while True:
+        success, frame = camera.read()
 
-            if not success:
-                break
+        if not success:
+            break
 
-            frame = cv2.flip(frame, 1)
+        frame = cv2.flip(frame, 1)
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.GaussianBlur(gray, (21, 21), 0)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
-            motion_detected = False
-            total_motion_area = 0
+        motion_detected = False
+        total_motion_area = 0
 
-            if previous_gray is not None:
-                delta = cv2.absdiff(previous_gray, gray)
-                threshold = cv2.threshold(delta, 25, 255, cv2.THRESH_BINARY)[1]
-                threshold = cv2.dilate(threshold, None, iterations=2)
+        if previous_gray is not None:
+            delta = cv2.absdiff(previous_gray, gray)
+            threshold = cv2.threshold(delta, 25, 255, cv2.THRESH_BINARY)[1]
+            threshold = cv2.dilate(threshold, None, iterations=2)
 
-                contours, _ = cv2.findContours(
-                    threshold,
-                    cv2.RETR_EXTERNAL,
-                    cv2.CHAIN_APPROX_SIMPLE,
-                )
-
-                for contour in contours:
-                    area = cv2.contourArea(contour)
-
-                    if area < 1200:
-                        continue
-
-                    motion_detected = True
-                    total_motion_area += int(area)
-
-                    x, y, w, h = cv2.boundingRect(contour)
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-            previous_gray = gray
-            current_time = time.time()
-
-            if motion_detected:
-                timestamp = now_iso()
-
-                last_motion_state["motion_detected"] = True
-                last_motion_state["last_motion_time"] = timestamp
-                last_motion_state["motion_area"] = total_motion_area
-
-                if current_time - last_saved_motion_time >= MOTION_SAVE_COOLDOWN_SECONDS:
-                    save_motion_event(total_motion_area)
-                    last_saved_motion_time = current_time
-
-                label = f"MOTION DETECTED area={total_motion_area}"
-                color = (0, 255, 0)
-            else:
-                last_motion_state["motion_detected"] = False
-                last_motion_state["motion_area"] = 0
-
-                label = "No motion"
-                color = (180, 180, 180)
-
-            cv2.putText(
-                frame,
-                label,
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                color,
-                2,
-                cv2.LINE_AA,
+            contours, _ = cv2.findContours(
+                threshold,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
             )
 
-            frame_bytes = encode_frame(frame)
+            for contour in contours:
+                area = cv2.contourArea(contour)
 
-            if frame_bytes is None:
-                continue
+                if area < 1200:
+                    continue
 
-            yield mjpeg_chunk(frame_bytes)
+                motion_detected = True
+                total_motion_area += int(area)
 
-    finally:
-        camera.release()
+                x, y, w, h = cv2.boundingRect(contour)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
+        previous_gray = gray
+        current_time = time.time()
+
+        if motion_detected:
+            timestamp = now_iso()
+
+            last_motion_state["motion_detected"] = True
+            last_motion_state["last_motion_time"] = timestamp
+            last_motion_state["motion_area"] = total_motion_area
+
+            if current_time - last_saved_motion_time >= MOTION_SAVE_COOLDOWN_SECONDS:
+                save_motion_event(total_motion_area)
+                last_saved_motion_time = current_time
+
+            label = f"MOTION DETECTED area={total_motion_area}"
+            color = (0, 255, 0)
+        else:
+            last_motion_state["motion_detected"] = False
+            last_motion_state["motion_area"] = 0
+
+            label = "No motion"
+            color = (180, 180, 180)
+
+        cv2.putText(
+            frame,
+            label,
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+        frame_bytes = encode_frame(frame)
+
+        if frame_bytes is None:
+            continue
+
+        yield mjpeg_chunk(frame_bytes)
 
 @app.get("/api/camera/stream")
 def camera_stream():
@@ -650,29 +704,17 @@ def motion_stream():
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
-
 @app.get("/api/camera/status")
 def camera_status():
-    if not CAMERA_ENABLED:
-        return {
-            "camera_index": CAMERA_INDEX,
-            "enabled": False,
-            "available": None,
-            "message": "Camera is disabled for privacy.",
-        }
-
-    camera = open_camera()
-    opened = camera is not None
-
-    if camera is not None:
-        camera.release()
-
     return {
         "camera_index": CAMERA_INDEX,
-        "enabled": True,
-        "available": opened,
+        "enabled": CAMERA_ENABLED,
+        "available": True,
+        "backend": "picamera2" if PICAMERA2_AVAILABLE else "opencv",
+        "picamera2_available": PICAMERA2_AVAILABLE,
+        "use_picamera2": USE_PICAMERA2,
+        "note": "Status endpoint does not open the camera to avoid Pi camera locking.",
     }
-
 
 @app.get("/api/camera/motion-status")
 def motion_status():

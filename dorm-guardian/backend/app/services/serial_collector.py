@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import serial
 
 
-PORT = "/dev/cu.usbmodem11403"  # Mac
+PORT = "/dev/ttyACM0"  # Mac
 # PORT = "/dev/ttyACM0"         # Raspberry Pi later
 
 BAUD = 115200
